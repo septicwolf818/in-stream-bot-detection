@@ -1,0 +1,17 @@
+.vscode
+.metals
+.idea
+.scalafmt.conf
+__pycache__
+.DS_Store
+event_storage_test
+stream_project/.DS_Store
+stream_project/container-data
+stream_project/dstream/.bsp
+stream_project/dstream/project/project
+stream_project/dstream/project/target
+stream_project/dstream/project/build.properties
+stream_project/dstream/target
+tests/__pycache__
+tests/.pytest_cache
+tests/pytestdebug.log

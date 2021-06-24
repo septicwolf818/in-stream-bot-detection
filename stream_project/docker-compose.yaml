@@ -1,0 +1,147 @@
+# Docker setup for the project
+
+# Project services
+services:
+
+# Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:6.1.1
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2191:2181"
+
+# Kafka server
+  kafka:
+    image: confluentinc/cp-kafka:6.1.1
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: "LISTENER_DOCKER_INTERNAL://kafka:19092,LISTENER_DOCKER_EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: LISTENER_DOCKER_INTERNAL:PLAINTEXT,LISTENER_DOCKER_EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: LISTENER_DOCKER_INTERNAL
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_BROKER_ID: 1
+    depends_on:
+      - zookeeper
+
+  kafka-init:
+    image: confluentinc/cp-kafka:6.1.1
+    container_name: kafka-init
+    volumes: 
+      - ./scripts/wait_for_it.sh:/wait_for_it.sh:z
+      - ./scripts/kafka_init.sh:/kafka_init.sh:z
+    command: ["/kafka_init.sh"]
+    depends_on:
+      - zookeeper
+      - kafka
+
+# Kafka Connect 
+  connect:
+    image: confluentinc/cp-kafka-connect:6.1.1
+    container_name: connect
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:19092"
+      CONNECT_REST_PORT: 8083
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_GROUP_ID: kafka-connect-spooldir
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect-spooldir
+    command:
+      - bash
+      - -c
+      - |
+        echo "Installing Connector"
+        confluent-hub install --no-prompt jcustenborder/kafka-connect-spooldir:latest
+        #
+        echo "Launching Kafka Connect worker"
+        /etc/confluent/docker/run &
+        #
+        sleep infinity
+    volumes:
+      - ./container-data/connect/data:/connect/data:z
+      - ./container-data/connect/finished:/connect/finished:z
+      - ./container-data/connect/error:/connect/error:z
+    depends_on:
+      - kafka
+
+  connect-init:
+    image: confluentinc/cp-kafka-connect:6.1.1
+    container_name: connect-init
+    volumes: 
+      - ./scripts/wait_for_it.sh:/wait_for_it.sh:z
+      - ./scripts/connect_init.sh:/connect_init.sh:z
+    command: ["/connect_init.sh"]
+    depends_on:
+      - connect
+      - kafka-init
+
+  # Redis
+  redis:
+    image: redis:6.2.1
+    container_name: redis
+    ports:
+      - "6379:6379"
+  
+  # Cassandra
+  cassandra:
+    image: cassandra:3.11.10
+    container_name: cassandra
+    ports:
+      - "7000:7000"
+      - "9042:9042"
+    environment: 
+      CASSANDRA_DC: datacenter1
+
+  cassandra-init:
+    image: cassandra:3.11.10
+    container_name: cassandra-init
+    ports: 
+      - "9043:9042"
+    volumes: 
+      - ./scripts/wait_for_it.sh:/wait_for_it.sh:z
+      - ./scripts/cassandra_init.cql:/cassandra_init.cql:z
+      - ./scripts/cassandra_init.sh:/cassandra_init.sh:z
+    depends_on:
+      - cassandra
+    command: ["/cassandra_init.sh"]
+
+  # Apache Spark Master
+  spark-master:
+    image: bitnami/spark:3.1.1
+    container_name: spark-master
+    ports:
+      - "7077:7077"
+      - "8080:8080"  
+      - "4040:4040"  
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+    volumes: 
+      - ./container-data/spark/jars:/spark/jars:z
+      - ./container-data/spark/apps:/spark/apps:z
+      - ./container-data/spark/checkpoints:/spark/checkpoints:z
+
+  # Apache Spark Worker
+  spark-worker:
+    image: bitnami/spark:3.1.1
+    container_name: spark-worker
+    ports:
+      - "8081:8081"
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+    volumes:
+      - ./container-data/spark/checkpoints:/spark/checkpoints:z
+    depends_on:
+      - spark-master
